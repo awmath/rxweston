@@ -1,0 +1,60 @@
+#!/bin/bash
+set -e
+
+usage() {
+    cat <<EOM
+    Usage:
+    $(basename $0) [weston-args] [-- executable [executable-args]]
+
+EOM
+    exit 0
+}
+
+[ -z $1 ] && { usage; }
+
+
+X_DISPLAY=:23
+WL_SOCKET=xweston
+
+if [[ -z "$XDG_RUNTIME_DIR" ]]; then
+    echo "XDG_RUNTIME_DIR not set" 1>&2
+    exit 1
+fi
+
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
+
+# parse arguemnts
+weston_args="-S $WL_SOCKET"
+while [ -n "$1" ]; do
+    if [ "$1" = "--" ]; then
+        shift
+        break
+    fi
+    weston_args="$weston_args $1"
+    shift
+done
+
+TEMP_CONFIG=$(mktemp)
+trap '{ rm -f -- "${TEMP_CONFIG}"; }' EXIT
+
+cat << EOF > ${TEMP_CONFIG}
+[core]
+require-input=false
+shell=desktop-shell.so
+xwayland=False
+[shell]
+panel-position=none
+num-workspaces=1
+
+EOF
+
+weston -c ${TEMP_CONFIG} $weston_args &
+
+# wait for wayland socket
+while [ ! -S $XDG_RUNTIME_DIR/$WL_SOCKET ]; do sleep 1; done
+WAYLAND_DISPLAY=$WL_SOCKET Xwayland $X_DISPLAY &
+
+# wait for Xwayland lock
+while [ ! -f /tmp/.X${X_DISPLAY//:}-lock ]; do sleep 1; done
+
+DISPLAY=$X_DISPLAY exec $*
